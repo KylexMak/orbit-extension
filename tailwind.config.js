@@ -8,13 +8,13 @@ export default {
     extend: {
       colors: {
         aurora: {
-          bg: '#1a1a2e', // Deep blue/purple background
-          primary: '#a78bfa', // Soft purple
-          secondary: '#60a5fa', // Soft blue
-          accent: '#c084fc', // Bright purple accent
-          text: '#f3f4f6', // Off-white text
-          muted: '#9ca3af', // Gray text
-          card: '#1f2937', // Dark card background
+          bg: '#f0f4f8',       // Soft blue-gray background
+          primary: '#7c3aed',  // Purple (header accent)
+          secondary: '#3b82f6', // Calming blue
+          accent: '#6366f1',   // Indigo
+          text: '#1e293b',     // Dark slate text
+          muted: '#94a3b8',    // Muted slate
+          card: '#ffffff',     // White cards
         }
       },
       fontFamily: {

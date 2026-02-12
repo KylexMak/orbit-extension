@@ -25,10 +25,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
             const { data: { user } } = await supabase.auth.getUser();
 
             if (!user) {
-                // Handle no user - maybe anon auth or error
                 console.error("No user found");
-                // For now, let's just create a mock profile if no auth is set up
-                // In real app, we'd force auth.
             } else {
                 const { error } = await supabase.from('profiles').upsert({
                     id: user.id,
@@ -38,13 +35,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                 if (error) throw error;
             }
 
-            // We'll call onComplete regardless for now to let user through
-            // In production we'd want strict saving checks
             onComplete();
 
         } catch (error) {
             console.error('Error saving profile:', error);
-            // Fallback for demo without backend
             onComplete();
         } finally {
             setLoading(false);
@@ -53,7 +47,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
 
     return (
         <div className="h-full flex items-center justify-center p-4 bg-aurora-bg">
-            <Card className="w-full max-w-sm border-aurora-primary/30">
+            <Card className="w-full max-w-sm">
                 <CardHeader>
                     <CardTitle className="bg-gradient-to-r from-aurora-primary to-aurora-secondary bg-clip-text text-transparent text-center">
                         Welcome to Orbit
@@ -65,7 +59,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                 <CardContent>
                     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                         <div className="space-y-2">
-                            <label className="text-sm font-medium flex items-center gap-2">
+                            <label className="text-sm font-medium flex items-center gap-2 text-aurora-text">
                                 <Moon className="w-4 h-4 text-aurora-primary" />
                                 Wait, I sleep at...
                             </label>
@@ -73,20 +67,18 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                                 type="time"
                                 defaultValue="23:00"
                                 {...register('sleepStart', { required: true })}
-                                className="bg-aurora-bg/50 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
                             />
                         </div>
 
                         <div className="space-y-2">
-                            <label className="text-sm font-medium flex items-center gap-2">
-                                <Sun className="w-4 h-4 text-secondary" />
+                            <label className="text-sm font-medium flex items-center gap-2 text-aurora-text">
+                                <Sun className="w-4 h-4 text-aurora-secondary" />
                                 And I wake up at...
                             </label>
                             <Input
                                 type="time"
                                 defaultValue="07:00"
                                 {...register('sleepEnd', { required: true })}
-                                className="bg-aurora-bg/50 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
                             />
                         </div>
 

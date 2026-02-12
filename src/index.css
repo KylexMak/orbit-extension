@@ -6,7 +6,8 @@
   body {
     @apply bg-aurora-bg text-aurora-text font-sans antialiased;
     width: 400px;
-    height: 600px;
+    min-height: 200px;
+    max-height: 600px;
     overflow: hidden;
   }
 }
@@ -17,14 +18,14 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent; 
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #4b5563; 
+  background: #cbd5e1;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #6b7280; 
+  background: #94a3b8;
 }

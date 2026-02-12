@@ -61,8 +61,8 @@ function App() {
   const renderContent = () => {
     if (loading) {
       return (
-        <div className="h-screen flex items-center justify-center bg-aurora-bg text-aurora-primary">
-          <Loader2 className="w-8 h-8 animate-spin" />
+        <div className="h-screen flex items-center justify-center bg-aurora-bg">
+          <Loader2 className="w-8 h-8 animate-spin text-aurora-primary" />
         </div>
       );
     }
@@ -74,7 +74,7 @@ function App() {
           <p className="text-aurora-muted text-center max-w-xs">Your personal time and social supportive assistant.</p>
           <button
             onClick={handleAnonymousLogin}
-            className="px-4 py-2 bg-aurora-primary text-white rounded-md hover:bg-opacity-90 transition"
+            className="px-4 py-2 bg-aurora-primary text-white rounded-md hover:bg-aurora-primary/90 transition shadow-sm"
           >
             Enter Orbit
           </button>
