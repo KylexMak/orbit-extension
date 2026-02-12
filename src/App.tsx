@@ -7,7 +7,7 @@ import { Focus } from './views/Focus';
 import { supabase } from './lib/supabaseClient';
 import { Loader2 } from 'lucide-react';
 
-declare const chrome: any;
+
 
 function App() {
   const [loading, setLoading] = useState(true);
