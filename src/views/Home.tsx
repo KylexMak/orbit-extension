@@ -56,13 +56,11 @@ export const Home = () => {
         const { start, end } = calculateNextAvailableSlot(duration, events, profile.sleep_start, profile.sleep_end);
 
         skipEvent(event, start, end);
-        // Show toast (mocked for now)
         alert(`No worries! We moved this to ${format(start, 'h:mm a')} so you can rest.`);
     };
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
-        // Default 1 hour duration starting now
         const start = new Date();
         const end = addHours(start, 1);
         await addEvent(newTitle, start, end);
@@ -100,7 +98,7 @@ export const Home = () => {
     };
 
     return (
-        <div className="space-y-4 pb-16">
+        <div className="space-y-4">
             <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-aurora-text">Your Rhythm</h2>
                 <Button size="sm" onClick={() => setShowAddForm(!showAddForm)}>
@@ -138,8 +136,8 @@ export const Home = () => {
                         <div
                             key={event.id}
                             className={`relative p-4 rounded-xl border transition-all ${isBreak
-                                ? 'bg-emerald-900/20 border-emerald-500/30 text-emerald-100'
-                                : 'bg-aurora-card border-aurora-primary/20 text-aurora-text hover:border-aurora-accent/50'
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                : 'bg-white border-gray-200 text-aurora-text hover:border-aurora-accent/50 shadow-sm'
                                 }`}
                         >
                             <div className="flex justify-between items-start">
@@ -154,12 +152,12 @@ export const Home = () => {
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => handleSkip(event)}
-                                            className="p-2 hover:bg-white/10 rounded-full text-aurora-muted hover:text-aurora-accent transition-colors"
+                                            className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-aurora-accent transition-colors"
                                             title="Skip & Reschedule"
                                         >
                                             <SkipForward className="w-4 h-4" />
                                         </button>
-                                        <button className="p-2 hover:bg-white/10 rounded-full text-aurora-muted hover:text-green-400 transition-colors">
+                                        <button className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-green-500 transition-colors">
                                             <CheckCircle className="w-4 h-4" />
                                         </button>
                                     </div>

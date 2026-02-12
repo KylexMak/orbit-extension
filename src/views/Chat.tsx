@@ -12,7 +12,7 @@ interface Message {
     user_id: string;
     content: string;
     created_at: string;
-    sender_name?: string; // Optional for now
+    sender_name?: string;
     is_bot?: boolean;
 }
 
@@ -40,10 +40,6 @@ export const Chat = () => {
                 .subscribe();
             return () => { supabase.removeChannel(channel); };
         } else {
-            // Bob mode local state check? 
-            // We might want to persist Bob chat, but for MVP let's keep it ephemeral or just mock it.
-            // Actually, let's just clear messages when switching to Bob for this MVP version, 
-            // to avoid complexity of storing private AI chats in DB.
             setMessages([
                 { id: 'welcome', user_id: 'bob', content: "Hi! I'm Bob. How are you feeling today?", created_at: new Date().toISOString(), is_bot: true }
             ]);
@@ -80,8 +76,6 @@ export const Chat = () => {
             });
             if (error) console.error(error);
         } else {
-            // Bob Mode
-            // 1. Add user message locally
             const userMsg: Message = {
                 id: Date.now().toString(),
                 user_id: currentUserId,
@@ -91,7 +85,6 @@ export const Chat = () => {
             setMessages(prev => [...prev, userMsg]);
             setLoadingAI(true);
 
-            // 2. Get AI response
             const aiResponse = await getGeminiResponse(text);
 
             const bobMsg: Message = {
@@ -107,34 +100,34 @@ export const Chat = () => {
     };
 
     return (
-        <div className="flex flex-col h-[calc(100vh-140px)]">
+        <div className="flex flex-col h-full">
             <div className="flex justify-center space-x-2 mb-4">
                 <button
                     onClick={() => setMode('community')}
-                    className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors", mode === 'community' ? "bg-aurora-primary text-white" : "bg-aurora-card text-aurora-muted hover:text-aurora-text")}
+                    className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors", mode === 'community' ? "bg-aurora-primary text-white shadow-sm" : "bg-white text-aurora-muted border border-gray-200 hover:text-aurora-text")}
                 >
                     <div className="flex items-center gap-2"><MessageSquare className="w-4 h-4" /> Community</div>
                 </button>
                 <button
                     onClick={() => setMode('bob')}
-                    className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors", mode === 'bob' ? "bg-aurora-secondary text-white" : "bg-aurora-card text-aurora-muted hover:text-aurora-text")}
+                    className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors", mode === 'bob' ? "bg-aurora-secondary text-white shadow-sm" : "bg-white text-aurora-muted border border-gray-200 hover:text-aurora-text")}
                 >
                     <div className="flex items-center gap-2"><Bot className="w-4 h-4" /> Bob (AI)</div>
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto mb-4 space-y-3 pr-2 scrollbar-thin" ref={scrollRef}>
+            <div className="flex-1 overflow-y-auto mb-4 space-y-3 pr-2" ref={scrollRef}>
                 {messages.map((msg) => {
                     const isMe = msg.user_id === currentUserId;
-                    const isBob = msg.is_bot || msg.user_id === 'bob'; // Check both for safety
+                    const isBob = msg.is_bot || msg.user_id === 'bob';
 
                     return (
                         <div key={msg.id} className={cn("flex", isMe ? "justify-end" : "justify-start")}>
                             <div className={cn(
-                                "max-w-[80%] rounded-2xl px-4 py-2 text-sm",
+                                "max-w-[80%] rounded-2xl px-4 py-2 text-sm shadow-sm",
                                 isMe ? "bg-aurora-primary text-white rounded-br-none" :
                                     isBob ? "bg-aurora-secondary text-white rounded-bl-none" :
-                                        "bg-aurora-card text-aurora-text rounded-bl-none"
+                                        "bg-white text-aurora-text border border-gray-200 rounded-bl-none"
                             )}>
                                 {msg.content}
                             </div>

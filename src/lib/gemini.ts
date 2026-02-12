@@ -12,7 +12,7 @@ export const getGeminiResponse = async (userMessage: string) => {
     if (!API_KEY) return "I'm having trouble connecting to my brain (API Key missing).";
 
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
         const prompt = `
       You are Bob, a supportive, empathetic college mentor and friend. 
