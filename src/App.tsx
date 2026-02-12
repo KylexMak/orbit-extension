@@ -7,28 +7,62 @@ import { Focus } from './views/Focus';
 import { supabase } from './lib/supabaseClient';
 import { Loader2 } from 'lucide-react';
 
+declare const chrome: any;
+
 function App() {
   const [loading, setLoading] = useState(true);
+  const [debugStatus, setDebugStatus] = useState('Initializing...');
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [session, setSession] = useState<any>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [activeTab, setActiveTab] = useState<'home' | 'chat' | 'focus'>('home');
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
+    // Safety timeout
+    const timer = setTimeout(() => {
+      setLoading((prev) => {
+        if (prev) {
+          setDebugStatus('Loading timed out. Please check console or network.');
+          return false;
+        }
+        return prev;
+      });
+    }, 10000);
+
+    setDebugStatus('Checking session...');
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) checkProfile(session.user.id);
-      else setLoading(false);
+      if (session) {
+        setDebugStatus('Session found. Checking profile...');
+        checkProfile(session.user.id);
+      } else {
+        setDebugStatus('No session found.');
+        setLoading(false);
+      }
+    }).catch((error) => {
+      console.error('Error getting session:', error);
+      setDebugStatus(`Error: ${error.message}`);
+      setLoading(false);
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) checkProfile(session.user.id);
+      if (session) {
+        setDebugStatus('Auth state changed. Checking profile...');
+        checkProfile(session.user.id);
+      }
+      else if (!session && loading) {
+        setLoading(false);
+      }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(timer);
+    };
   }, []);
 
   const checkProfile = async (userId: string) => {
@@ -39,21 +73,132 @@ function App() {
         .eq('id', userId)
         .single();
 
-      if (data) setHasProfile(true);
-      else setHasProfile(false);
+      if (data) {
+        setDebugStatus('Profile found.');
+        setHasProfile(true);
+      } else {
+        setDebugStatus('No profile found.');
+        setHasProfile(false);
+      }
     } catch (e) {
       console.error(e);
+      setDebugStatus('Error checking profile.');
       setHasProfile(false);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAnonymousLogin = async () => {
+  const handleGoogleLogin = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInAnonymously();
+    setAuthUrl(null);
+    setDebugStatus('Initiating Google Login via Chrome Identity...');
+
+    // Environment check: Are we in a Chrome Extension?
+    const isExtension = typeof chrome !== 'undefined' && chrome.identity && chrome.identity.launchWebAuthFlow;
+
+    if (!isExtension) {
+      setDebugStatus('Not in extension. Redirecting via standard web flow...');
+      // Standard web fallback (e.g. for localhost)
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          scopes: 'https://www.googleapis.com/auth/calendar',
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) {
+        console.error('Error signing in:', error);
+        setDebugStatus(`Login Error: ${error.message}`);
+        setLoading(false);
+      }
+      return;
+    }
+
+    // 1. Get the Auth URL from Supabase
+    // We use the standard `https://<id>.chromiumapp.org/` redirect.
+    // This is more robust for launchWebAuthFlow than chrome-extension:// links.
+    const redirectUrl = chrome.identity.getRedirectURL();
+
+    setDebugStatus('Getting Auth URL from Supabase...');
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        scopes: 'https://www.googleapis.com/auth/calendar',
+        redirectTo: redirectUrl,
+        skipBrowserRedirect: true
+      }
+    });
+
     if (error) {
-      console.error('Error signing in:', error);
+      setDebugStatus(`Error generating Auth URL: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+
+    if (!data?.url) {
+      setDebugStatus('No Auth URL returned from Supabase.');
+      setLoading(false);
+      return;
+    }
+
+    // 2. Launch Web Auth Flow
+    setDebugStatus('Launching Chrome Web Auth Flow...');
+
+    try {
+      chrome.identity.launchWebAuthFlow({
+        url: data.url,
+        interactive: true
+      }, async (callbackUrl: string | undefined) => {
+        if (chrome.runtime.lastError) {
+          setDebugStatus(`Identity Error: ${chrome.runtime.lastError.message}`);
+          setLoading(false);
+          return;
+        }
+
+        if (callbackUrl) {
+          setDebugStatus('Callback received. Parsing tokens...');
+          // Parse tokens from hash
+          // callbackUrl is like https://<id>.chromiumapp.org/#access_token=...
+          try {
+            const hash = new URL(callbackUrl).hash.substring(1); // remove #
+            const params = new URLSearchParams(hash);
+            const accessToken = params.get('access_token');
+            const refreshToken = params.get('refresh_token');
+
+            if (accessToken) {
+              setDebugStatus('Got tokens. Setting Supabase session...');
+              const { error } = await supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken || '',
+              });
+
+              if (error) {
+                setDebugStatus(`SetSession Error: ${error.message}`);
+                setLoading(false);
+              } else {
+                // Successful login!
+                setDebugStatus('Session set! Reloading...');
+                // Force check session to trigger UI update
+                const { data: { session } } = await supabase.auth.getSession();
+                setSession(session);
+                if (session) checkProfile(session.user.id);
+              }
+            } else {
+              setDebugStatus('No access_token found in callback URL.');
+              setLoading(false);
+            }
+          } catch (parseError: any) {
+            setDebugStatus(`Error parsing callback: ${parseError.message}`);
+            setLoading(false);
+          }
+        } else {
+          setDebugStatus('No callback URL received.');
+          setLoading(false);
+        }
+      });
+    } catch (e: any) {
+      setDebugStatus(`Launch Error: ${e.message}`);
       setLoading(false);
     }
   };
@@ -61,23 +206,59 @@ function App() {
   const renderContent = () => {
     if (loading) {
       return (
-        <div className="h-screen flex items-center justify-center bg-aurora-bg text-aurora-primary">
+        <div className="h-screen flex flex-col items-center justify-center bg-aurora-bg text-aurora-primary gap-4">
           <Loader2 className="w-8 h-8 animate-spin" />
+          <p className="text-sm text-aurora-muted font-mono">{debugStatus}</p>
         </div>
       );
     }
 
     if (!session) {
+      // Safe access to redirect URL for display
+      const isExtension = typeof chrome !== 'undefined' && chrome.identity && chrome.identity.getRedirectURL;
+      const displayRedirectUrl = isExtension ? chrome.identity.getRedirectURL() : window.location.origin;
+
       return (
         <div className="h-screen flex flex-col items-center justify-center bg-aurora-bg p-6 space-y-4">
           <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-aurora-primary to-aurora-secondary">Orbit</h1>
           <p className="text-aurora-muted text-center max-w-xs">Your personal time and social supportive assistant.</p>
+
           <button
-            onClick={handleAnonymousLogin}
-            className="px-4 py-2 bg-aurora-primary text-white rounded-md hover:bg-opacity-90 transition"
+            onClick={handleGoogleLogin}
+            className="px-4 py-2 bg-white text-black font-medium rounded-md hover:bg-gray-100 transition flex items-center gap-2"
           >
-            Enter Orbit
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+              <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+              <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.26z" />
+              <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+            </svg>
+            Enter Orbit with Google
           </button>
+
+          {authUrl && (
+            <div className="text-center space-y-2 animate-in fade-in">
+              <p className="text-green-400 text-xs">Auth URL Ready</p>
+              <a
+                href={authUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-aurora-accent underline break-all hover:text-white"
+              >
+                Click here if popup didn't open
+              </a>
+            </div>
+          )}
+
+          <div className="text-xs text-aurora-muted/50 font-mono mt-8 text-center">
+            <p>Status: {debugStatus}</p>
+            <p className="mt-2 text-[10px] break-all max-w-xs mx-auto text-yellow-400">
+              Redirect URL: {displayRedirectUrl}
+            </p>
+            <p className="text-[10px] mt-1 text-aurora-muted/30">
+              (ADD THIS URL TO SUPABASE)
+            </p>
+          </div>
         </div>
       );
     }
@@ -105,6 +286,20 @@ function App() {
               <button onClick={() => setShowSettings(false)} className="text-aurora-primary hover:text-aurora-accent">Close</button>
             </div>
             <Onboarding onComplete={() => setShowSettings(false)} />
+
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <h3 className="text-sm font-medium mb-2 text-aurora-muted">Account</h3>
+              <button
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  setSession(null);
+                  setShowSettings(false);
+                }}
+                className="w-full py-2 px-4 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-md transition-colors text-sm font-medium flex items-center justify-center gap-2"
+              >
+                Sign Out
+              </button>
+            </div>
 
             <div className="mt-auto text-center text-xs text-aurora-muted p-4">
               v1.0.0 • Orbit

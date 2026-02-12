@@ -15,20 +15,40 @@ export const Home = () => {
     const [newTitle, setNewTitle] = useState('');
     const [profile, setProfile] = useState<{ sleep_start: string, sleep_end: string } | null>(null);
 
+    const [googleEvents, setGoogleEvents] = useState<Event[]>([]);
+
     useEffect(() => {
         // Determine profile for sleep schedule
-        supabase.auth.getUser().then(async ({ data: { user } }) => {
-            if (user) {
-                const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        supabase.auth.getSession().then(async ({ data: { session } }) => {
+            if (session?.user) {
+                const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
                 setProfile(data);
+
+                if (session.provider_token) {
+                    const { getUpcomingEvents } = await import('../lib/googleCalendar');
+                    const gEvents = await getUpcomingEvents(session.provider_token);
+                    const mappedEvents: Event[] = gEvents.map(ge => ({
+                        id: ge.id,
+                        user_id: session.user.id,
+                        title: `📅 ${ge.summary}`,
+                        start_time: ge.start.dateTime || ge.start.date || new Date().toISOString(),
+                        end_time: ge.end.dateTime || ge.end.date || new Date().toISOString(),
+                        type: 'event',
+                        status: 'pending'
+                    }));
+                    setGoogleEvents(mappedEvents);
+                }
             }
         });
     }, []);
 
     useEffect(() => {
-        const withBreaks = injectSmartBreaks(events);
+        const allEvents = [...events, ...googleEvents].sort((a, b) =>
+            new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+        );
+        const withBreaks = injectSmartBreaks(allEvents);
         setDisplayEvents(withBreaks);
-    }, [events]);
+    }, [events, googleEvents]);
 
     const handleSkip = (event: Event) => {
         if (!profile) return;
@@ -46,6 +66,35 @@ export const Home = () => {
         const start = new Date();
         const end = addHours(start, 1);
         await addEvent(newTitle, start, end);
+
+        // Sync to Google Calendar if connected
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.provider_token) {
+            try {
+                const { createEvent } = await import('../lib/googleCalendar');
+                const newEvent = await createEvent(session.provider_token, newTitle, start, end);
+
+                if (newEvent) {
+                    // Refresh list to show the new Google event immediately
+                    // Ideally we'd just add it to state, but fetching is safer for consistency
+                    const { getUpcomingEvents } = await import('../lib/googleCalendar');
+                    const gEvents = await getUpcomingEvents(session.provider_token);
+                    const mappedEvents: Event[] = gEvents.map(ge => ({
+                        id: ge.id,
+                        user_id: session.user.id,
+                        title: `📅 ${ge.summary}`,
+                        start_time: ge.start.dateTime || ge.start.date || new Date().toISOString(),
+                        end_time: ge.end.dateTime || ge.end.date || new Date().toISOString(),
+                        type: 'event',
+                        status: 'pending'
+                    }));
+                    setGoogleEvents(mappedEvents);
+                }
+            } catch (err) {
+                console.error("Failed to sync to Google Calendar", err);
+            }
+        }
+
         setNewTitle('');
         setShowAddForm(false);
     };

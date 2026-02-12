@@ -1,7 +1,7 @@
 import { addMinutes, differenceInMinutes, isAfter, isBefore } from 'date-fns';
 
 export interface Event {
-    id: number;
+    id: string | number;
     user_id: string;
     title: string;
     start_time: string; // ISO string
