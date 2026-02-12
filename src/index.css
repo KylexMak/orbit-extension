@@ -5,6 +5,9 @@
 @layer base {
   body {
     @apply bg-aurora-bg text-aurora-text font-sans antialiased;
+  }
+
+  body.popup {
     width: 400px;
     min-height: 200px;
     max-height: 600px;

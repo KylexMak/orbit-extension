@@ -12,7 +12,6 @@ function App() {
   const [session, setSession] = useState<any>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [activeTab, setActiveTab] = useState<'home' | 'chat' | 'focus'>('home');
-  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -82,7 +81,7 @@ function App() {
       );
     }
 
-    if (!hasProfile && !showSettings) {
+    if (!hasProfile) {
       return <Onboarding onComplete={() => setHasProfile(true)} />;
     }
 
@@ -92,27 +91,17 @@ function App() {
       focus: Focus,
     }[activeTab];
 
+    const openSettings = () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+    };
+
     return (
       <Layout
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        onProfileClick={() => setShowSettings(true)}
+        onProfileClick={openSettings}
       >
-        {showSettings ? (
-          <div className="p-4 h-full flex flex-col">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold">Settings</h2>
-              <button onClick={() => setShowSettings(false)} className="text-aurora-primary hover:text-aurora-accent">Close</button>
-            </div>
-            <Onboarding onComplete={() => setShowSettings(false)} />
-
-            <div className="mt-auto text-center text-xs text-aurora-muted p-4">
-              v1.0.0 • Orbit
-            </div>
-          </div>
-        ) : (
-          <ViewComponent />
-        )}
+        <ViewComponent />
       </Layout>
     );
   };
