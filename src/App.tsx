@@ -7,8 +7,6 @@ import { Focus } from './views/Focus';
 import { supabase } from './lib/supabaseClient';
 import { Loader2 } from 'lucide-react';
 
-
-
 function App() {
   const [loading, setLoading] = useState(true);
   const [debugStatus, setDebugStatus] = useState('Initializing...');
@@ -116,8 +114,6 @@ function App() {
     }
 
     // 1. Get the Auth URL from Supabase
-    // We use the standard `https://<id>.chromiumapp.org/` redirect.
-    // This is more robust for launchWebAuthFlow than chrome-extension:// links.
     const redirectUrl = chrome.identity.getRedirectURL();
 
     setDebugStatus('Getting Auth URL from Supabase...');
@@ -158,36 +154,49 @@ function App() {
 
         if (callbackUrl) {
           setDebugStatus('Callback received. Parsing tokens...');
-          // Parse tokens from hash
-          // callbackUrl is like https://<id>.chromiumapp.org/#access_token=...
+          // We handle both Implicit (#access_token) and PKCE (?code) flows
           try {
-            const hash = new URL(callbackUrl).hash.substring(1); // remove #
-            const params = new URLSearchParams(hash);
-            const accessToken = params.get('access_token');
-            const refreshToken = params.get('refresh_token');
+            const url = new URL(callbackUrl);
+            const hashParams = new URLSearchParams(url.hash.substring(1));
+            const queryParams = new URLSearchParams(url.search);
+
+            const accessToken = hashParams.get('access_token');
+            const refreshToken = hashParams.get('refresh_token');
+            const code = queryParams.get('code');
+            const errorDesc = queryParams.get('error_description') || hashParams.get('error_description');
+
+            if (errorDesc) {
+              setDebugStatus(`Auth Error: ${errorDesc}`);
+              setLoading(false);
+              return;
+            }
 
             if (accessToken) {
-              setDebugStatus('Got tokens. Setting Supabase session...');
+              setDebugStatus('Got tokens (Implicit). Setting session...');
               const { error } = await supabase.auth.setSession({
                 access_token: accessToken,
                 refresh_token: refreshToken || '',
               });
 
-              if (error) {
-                setDebugStatus(`SetSession Error: ${error.message}`);
-                setLoading(false);
-              } else {
-                // Successful login!
-                setDebugStatus('Session set! Reloading...');
-                // Force check session to trigger UI update
-                const { data: { session } } = await supabase.auth.getSession();
-                setSession(session);
-                if (session) checkProfile(session.user.id);
-              }
+              if (error) throw error;
+            } else if (code) {
+              setDebugStatus('Got code (PKCE). Exchanging for session...');
+              const { error } = await supabase.auth.exchangeCodeForSession(code);
+              if (error) throw error;
             } else {
-              setDebugStatus('No access_token found in callback URL.');
+              setDebugStatus('No access_token or code found in callback.');
+              console.log('Callback URL:', callbackUrl);
               setLoading(false);
+              return;
             }
+
+            // Successful login!
+            setDebugStatus('Session set! Reloading...');
+            // Force check session to trigger UI update
+            const { data: { session } } = await supabase.auth.getSession();
+            setSession(session);
+            if (session) checkProfile(session.user.id);
+
           } catch (parseError: any) {
             setDebugStatus(`Error parsing callback: ${parseError.message}`);
             setLoading(false);
