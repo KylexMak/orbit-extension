@@ -73,7 +73,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                                 type="time"
                                 defaultValue="23:00"
                                 {...register('sleepStart', { required: true })}
-                                className="bg-aurora-bg/50"
+                                className="bg-aurora-bg/50 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
                             />
                         </div>
 
@@ -86,7 +86,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                                 type="time"
                                 defaultValue="07:00"
                                 {...register('sleepEnd', { required: true })}
-                                className="bg-aurora-bg/50"
+                                className="bg-aurora-bg/50 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
                             />
                         </div>
 
