@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Orbit - Time & Support",
+  "version": "1.0.0",
+  "description": "A supportive time management tool for students.",
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": "orbit-icon.png"
+  },
+  "icons": {
+    "16": "orbit-icon.png",
+    "48": "orbit-icon.png",
+    "128": "orbit-icon.png"
+  },
+  "permissions": [
+    "storage"
+  ]
+}
