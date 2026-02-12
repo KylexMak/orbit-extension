@@ -16,6 +16,41 @@ function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'chat' | 'focus'>('home');
   const [showSettings, setShowSettings] = useState(false);
 
+  // Consume auth tokens stored by the background service worker in chrome.storage.local
+  const consumeStoredTokens = async () => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+
+    const result = await chrome.storage.local.get(['auth_tokens', 'auth_error']);
+
+    if (result.auth_error) {
+      setDebugStatus(`Auth Error: ${result.auth_error}`);
+      await chrome.storage.local.remove(['auth_error']);
+      setLoading(false);
+      return;
+    }
+
+    if (result.auth_tokens) {
+      setDebugStatus('Found pending tokens. Setting Supabase session...');
+      const { access_token, refresh_token } = result.auth_tokens as { access_token: string; refresh_token: string };
+      await chrome.storage.local.remove(['auth_tokens']);
+
+      const { error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token: refresh_token || '',
+      });
+
+      if (error) {
+        setDebugStatus(`SetSession Error: ${error.message}`);
+        setLoading(false);
+      } else {
+        setDebugStatus('Session set!');
+        const { data: { session } } = await supabase.auth.getSession();
+        setSession(session);
+        if (session) checkProfile(session.user.id);
+      }
+    }
+  };
+
   useEffect(() => {
     // Safety timeout
     const timer = setTimeout(() => {
@@ -29,14 +64,20 @@ function App() {
     }, 10000);
 
     setDebugStatus('Checking session...');
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       if (session) {
         setDebugStatus('Session found. Checking profile...');
         checkProfile(session.user.id);
       } else {
-        setDebugStatus('No session found.');
-        setLoading(false);
+        // No existing session — check if background worker stored tokens while popup was closed
+        await consumeStoredTokens();
+        // If consumeStoredTokens didn't set a session, show login screen
+        const { data: { session: rechecked } } = await supabase.auth.getSession();
+        if (!rechecked) {
+          setDebugStatus('No session found.');
+          setLoading(false);
+        }
       }
     }).catch((error) => {
       console.error('Error getting session:', error);
@@ -57,9 +98,22 @@ function App() {
       }
     });
 
+    // Listen for storage changes in case background worker stores tokens while popup is open
+    const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
+      if (changes.auth_tokens?.newValue) {
+        consumeStoredTokens();
+      }
+    };
+    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener(storageListener);
+    }
+
     return () => {
       subscription.unsubscribe();
       clearTimeout(timer);
+      if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+        chrome.storage.onChanged.removeListener(storageListener);
+      }
     };
   }, []);
 
@@ -138,74 +192,40 @@ function App() {
       return;
     }
 
-    // 2. Launch Web Auth Flow
-    setDebugStatus('Launching Chrome Web Auth Flow...');
+    // 2. Send auth URL to background service worker (survives popup closing on Mac)
+    setDebugStatus('Sending auth to background worker...');
 
     try {
-      chrome.identity.launchWebAuthFlow({
-        url: data.url,
-        interactive: true
-      }, async (callbackUrl: string | undefined) => {
-        if (chrome.runtime.lastError) {
-          setDebugStatus(`Identity Error: ${chrome.runtime.lastError.message}`);
-          setLoading(false);
-          return;
-        }
+      chrome.runtime.sendMessage(
+        { type: 'START_AUTH', url: data.url },
+        async (response) => {
+          // This callback only fires if the popup is still open when auth completes.
+          // If the popup closed (Mac behavior), tokens are in chrome.storage.local
+          // and will be consumed on next popup open via consumeStoredTokens().
+          if (!response) return;
 
-        if (callbackUrl) {
-          setDebugStatus('Callback received. Parsing tokens...');
-          // We handle both Implicit (#access_token) and PKCE (?code) flows
-          try {
-            const url = new URL(callbackUrl);
-            const hashParams = new URLSearchParams(url.hash.substring(1));
-            const queryParams = new URLSearchParams(url.search);
+          if (response.success) {
+            setDebugStatus('Got tokens. Setting Supabase session...');
+            const { error } = await supabase.auth.setSession({
+              access_token: response.access_token,
+              refresh_token: response.refresh_token || '',
+            });
 
-            const accessToken = hashParams.get('access_token');
-            const refreshToken = hashParams.get('refresh_token');
-            const code = queryParams.get('code');
-            const errorDesc = queryParams.get('error_description') || hashParams.get('error_description');
-
-            if (errorDesc) {
-              setDebugStatus(`Auth Error: ${errorDesc}`);
+            if (error) {
+              setDebugStatus(`SetSession Error: ${error.message}`);
               setLoading(false);
-              return;
-            }
-
-            if (accessToken) {
-              setDebugStatus('Got tokens (Implicit). Setting session...');
-              const { error } = await supabase.auth.setSession({
-                access_token: accessToken,
-                refresh_token: refreshToken || '',
-              });
-
-              if (error) throw error;
-            } else if (code) {
-              setDebugStatus('Got code (PKCE). Exchanging for session...');
-              const { error } = await supabase.auth.exchangeCodeForSession(code);
-              if (error) throw error;
             } else {
-              setDebugStatus('No access_token or code found in callback.');
-              console.log('Callback URL:', callbackUrl);
-              setLoading(false);
-              return;
+              setDebugStatus('Session set!');
+              const { data: { session } } = await supabase.auth.getSession();
+              setSession(session);
+              if (session) checkProfile(session.user.id);
             }
-
-            // Successful login!
-            setDebugStatus('Session set! Reloading...');
-            // Force check session to trigger UI update
-            const { data: { session } } = await supabase.auth.getSession();
-            setSession(session);
-            if (session) checkProfile(session.user.id);
-
-          } catch (parseError: any) {
-            setDebugStatus(`Error parsing callback: ${parseError.message}`);
+          } else {
+            setDebugStatus(`Auth Error: ${response.error}`);
             setLoading(false);
           }
-        } else {
-          setDebugStatus('No callback URL received.');
-          setLoading(false);
         }
-      });
+      );
     } catch (e: any) {
       setDebugStatus(`Launch Error: ${e.message}`);
       setLoading(false);
