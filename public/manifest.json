@@ -16,6 +16,9 @@
     "storage",
     "identity"
   ],
+  "host_permissions": [
+    "https://www.googleapis.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   }

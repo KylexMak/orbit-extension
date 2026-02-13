@@ -155,7 +155,7 @@ function App() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          scopes: 'https://www.googleapis.com/auth/calendar',
+          scopes: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks',
           redirectTo: window.location.origin
         }
       });
@@ -174,7 +174,7 @@ function App() {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        scopes: 'https://www.googleapis.com/auth/calendar',
+        scopes: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks',
         redirectTo: redirectUrl,
         skipBrowserRedirect: true
       }
