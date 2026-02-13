@@ -14,6 +14,9 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
     const [showAddForm, setShowAddForm] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
+    const [newItemType, setNewItemType] = useState<'task' | 'event'>('event');
+    const [newDueDate, setNewDueDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+    const [newDueTime, setNewDueTime] = useState('');
     const [newStartTime, setNewStartTime] = useState('');
     const [newEndTime, setNewEndTime] = useState('');
     const [profile, setProfile] = useState<{ sleep_start: string, sleep_end: string } | null>(null);
@@ -188,6 +191,9 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
 
         setNewTitle('');
         setNewDescription('');
+        setNewItemType('event');
+        setNewDueDate(format(new Date(), 'yyyy-MM-dd'));
+        setNewDueTime('');
         setNewStartTime('');
         setNewEndTime('');
         setShowAddForm(false);
@@ -284,6 +290,26 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
                 <Card className="animate-in fade-in slide-in-from-top-4">
                     <CardContent className="pt-4">
                         <form onSubmit={handleCreate} className="space-y-3">
+                            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                                <button
+                                    type="button"
+                                    onClick={() => setNewItemType('task')}
+                                    className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${newItemType === 'task'
+                                        ? 'bg-blue-900 text-white'
+                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    Task
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setNewItemType('event')}
+                                    className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${newItemType === 'event'
+                                        ? 'bg-blue-100 text-blue-900 border-blue-200'
+                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    Event
+                                </button>
+                            </div>
                             <Input
                                 placeholder="What needs doing?"
                                 value={newTitle}
@@ -296,26 +322,48 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
                                 value={newDescription}
                                 onChange={e => setNewDescription(e.target.value)}
                             />
-                            <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                    <label className="text-xs text-aurora-muted mb-1 block">Start Time</label>
-                                    <Input
-                                        type="time"
-                                        value={newStartTime}
-                                        onChange={e => setNewStartTime(e.target.value)}
-                                        placeholder="Now"
-                                    />
+                            {newItemType === 'task' ? (
+                                <div className="space-y-2">
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">Due date</label>
+                                        <Input
+                                            type="date"
+                                            value={newDueDate}
+                                            onChange={e => setNewDueDate(e.target.value)}
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">Due time (optional)</label>
+                                        <Input
+                                            type="time"
+                                            value={newDueTime}
+                                            onChange={e => setNewDueTime(e.target.value)}
+                                        />
+                                    </div>
                                 </div>
-                                <div>
-                                    <label className="text-xs text-aurora-muted mb-1 block">End Time</label>
-                                    <Input
-                                        type="time"
-                                        value={newEndTime}
-                                        onChange={e => setNewEndTime(e.target.value)}
-                                        placeholder="+1 hour"
-                                    />
+                            ) : (
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">Start Time</label>
+                                        <Input
+                                            type="time"
+                                            value={newStartTime}
+                                            onChange={e => setNewStartTime(e.target.value)}
+                                            placeholder="Now"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">End Time</label>
+                                        <Input
+                                            type="time"
+                                            value={newEndTime}
+                                            onChange={e => setNewEndTime(e.target.value)}
+                                            placeholder="+1 hour"
+                                        />
+                                    </div>
                                 </div>
-                            </div>
+                            )}
                             <div className="flex gap-2">
                                 <Button type="submit" className="flex-1">Add</Button>
                                 <Button type="button" variant="secondary" onClick={() => setShowAddForm(false)}>Cancel</Button>
@@ -336,6 +384,7 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
                 {displayEvents.map((event) => {
                     const isBreak = event.type === 'break';
                     const isTask = event.type === 'task';
+                    const isEvent = event.type === 'event';
                     const isGoogleEvent = !!event.google_calendar_id;
 
                     return (
@@ -343,12 +392,14 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
                             key={event.id}
                             className={`relative p-4 rounded-xl border transition-all ${isBreak
                                 ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                                : 'bg-white border-gray-200 text-aurora-text hover:border-aurora-accent/50 shadow-sm'
+                                : isTask
+                                    ? 'bg-blue-900 border-blue-800 text-white hover:border-blue-700'
+                                    : 'bg-blue-50 border-blue-200 text-blue-900 hover:border-blue-300'
                                 }`}
                         >
                             <div className="flex justify-between items-start">
                                 <div className="flex-1">
-                                    <div className="flex items-center gap-2 text-sm opacity-70 font-mono mb-1">
+                                    <div className={`flex items-center gap-2 text-sm font-mono mb-1 ${isTask ? 'text-blue-200' : isEvent ? 'text-blue-700 opacity-90' : ''}`}>
                                         {isTask ? (
                                             <ListTodo className="w-3 h-3" />
                                         ) : isGoogleEvent ? (
@@ -357,12 +408,18 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
                                             <Clock className="w-3 h-3" />
                                         )}
                                         <span>
-                                            {format(new Date(event.start_time), 'h:mm a')} - {format(new Date(event.end_time), 'h:mm a')}
+                                            {isTask
+                                                ? (() => {
+                                                    const d = new Date(event.start_time);
+                                                    const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0;
+                                                    return `Due: ${format(d, 'MMM d, yyyy')}${hasTime ? ` at ${format(d, 'h:mm a')}` : ''}`;
+                                                })()
+                                                : `${format(new Date(event.start_time), 'h:mm a')} - ${format(new Date(event.end_time), 'h:mm a')}`}
                                         </span>
                                     </div>
                                     <h3 className="font-medium text-lg">{event.title}</h3>
                                     {event.description && (
-                                        <p className="text-sm text-aurora-muted mt-1">{event.description}</p>
+                                        <p className={`text-sm mt-1 ${isTask ? 'text-blue-200' : 'text-aurora-muted'}`}>{event.description}</p>
                                     )}
                                 </div>
 
@@ -370,12 +427,12 @@ export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCa
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => handleSkip(event)}
-                                            className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-aurora-accent transition-colors"
+                                            className={`p-2 rounded-full transition-colors ${isTask ? 'hover:bg-blue-800 text-blue-200 hover:text-white' : 'hover:bg-blue-100 text-aurora-muted hover:text-aurora-accent'}`}
                                             title="Skip & Reschedule"
                                         >
                                             <SkipForward className="w-4 h-4" />
                                         </button>
-                                        <button className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-green-500 transition-colors">
+                                        <button className={`p-2 rounded-full transition-colors ${isTask ? 'hover:bg-blue-800 text-blue-200 hover:text-green-400' : 'hover:bg-blue-100 text-aurora-muted hover:text-green-500'}`}>
                                             <CheckCircle className="w-4 h-4" />
                                         </button>
                                         <button
