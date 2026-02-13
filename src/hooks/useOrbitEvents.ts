@@ -24,30 +24,75 @@ export function useOrbitEvents() {
         setLoading(false);
     };
 
-    const addEvent = async (title: string, start: Date, end: Date) => {
+    const addEvent = async (
+        title: string, 
+        start: Date, 
+        end: Date, 
+        description?: string,
+        googleCalendarId?: string
+    ) => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const { error } = await supabase.from('events').insert({
+        const eventData: Record<string, string> = {
             user_id: user.id,
             title,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
             status: 'pending'
-        });
+        };
+
+        if (description) {
+            eventData.description = description;
+        }
+
+        if (googleCalendarId) {
+            eventData.google_calendar_id = googleCalendarId;
+        }
+
+        const { error } = await supabase.from('events').insert(eventData);
+
+        if (!error) fetchEvents();
+    };
+
+    const updateEvent = async (
+        event: Event, 
+        newStart: Date, 
+        newEnd: Date,
+        newTitle?: string,
+        newDescription?: string
+    ) => {
+        const updateData: Record<string, string> = {
+            start_time: newStart.toISOString(),
+            end_time: newEnd.toISOString(),
+            status: 'pending'
+        };
+
+        if (newTitle) {
+            updateData.title = newTitle;
+        }
+
+        if (newDescription !== undefined) {
+            updateData.description = newDescription;
+        }
+
+        const { error } = await supabase
+            .from('events')
+            .update(updateData)
+            .eq('id', event.id);
 
         if (!error) fetchEvents();
     };
 
     const skipEvent = async (event: Event, newStart: Date, newEnd: Date) => {
+        await updateEvent(event, newStart, newEnd);
+    };
+
+    const deleteEvent = async (eventId: string | number) => {
         const { error } = await supabase
             .from('events')
-            .update({
-                start_time: newStart.toISOString(),
-                end_time: newEnd.toISOString(),
-                status: 'pending'
-            })
-            .eq('id', event.id);
+            .delete()
+            .eq('id', eventId);
 
         if (!error) fetchEvents();
     };
@@ -75,5 +120,5 @@ export function useOrbitEvents() {
         };
     }, []);
 
-    return { events, loading, addEvent, skipEvent, fetchEvents };
+    return { events, loading, addEvent, updateEvent, skipEvent, deleteEvent, fetchEvents };
 }

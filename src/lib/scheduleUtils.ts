@@ -4,10 +4,13 @@ export interface Event {
     id: string | number;
     user_id: string;
     title: string;
+    description?: string;
     start_time: string; // ISO string
     end_time: string;   // ISO string
     status: 'pending' | 'completed' | 'skipped';
-    type?: 'event' | 'break'; // 'break' is virtual
+    type?: 'event' | 'break' | 'task'; // 'break' is virtual, 'task' is from Google Tasks
+    google_calendar_id?: string; // ID from Google Calendar API
+    google_task_id?: string; // ID from Google Tasks API
 }
 
 export const injectSmartBreaks = (events: Event[]): Event[] => {
