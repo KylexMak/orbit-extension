@@ -305,7 +305,10 @@ function App() {
     return (
       <Layout
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          setShowSettings(false);
+        }}
         onProfileClick={() => setShowSettings(true)}
       >
         {showSettings ? (
