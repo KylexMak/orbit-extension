@@ -39,11 +39,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
 
           if (access_token) {
+            // Also try to get provider_token
+            const provider_token = hashParams.get('provider_token') || queryParams.get('provider_token');
+
+            // DEBUG: Store the full callback URL to inspect what Supabase sent
             chrome.storage.local.set({
-              auth_tokens: { access_token, refresh_token: refresh_token || '' }
+              auth_tokens: { access_token, refresh_token: refresh_token || '', provider_token },
+              last_callback_url: callbackUrl
             }, () => {
               console.log('[background] Tokens stored in chrome.storage.local');
-              sendResponse({ success: true, access_token, refresh_token });
+              sendResponse({ success: true, access_token, refresh_token, provider_token });
             });
           } else {
             const error = 'No access_token in callback. URL: ' + callbackUrl;

@@ -24,10 +24,13 @@ export interface GoogleTask {
 
 export const getUpcomingEvents = async (providerToken: string): Promise<CalendarEvent[]> => {
     try {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
         const response = await fetch(
             'https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=' +
-            new Date().toISOString() +
-            '&maxResults=10&singleEvents=true&orderBy=startTime',
+            startOfDay.toISOString() +
+            '&maxResults=50&singleEvents=true&orderBy=startTime',
             {
                 headers: {
                     Authorization: `Bearer ${providerToken}`,
@@ -97,10 +100,10 @@ export const getTasks = async (providerToken: string): Promise<GoogleTask[]> => 
 };
 
 export const createEvent = async (
-    providerToken: string, 
-    title: string, 
-    start: Date, 
-    end: Date, 
+    providerToken: string,
+    title: string,
+    start: Date,
+    end: Date,
     description?: string
 ): Promise<CalendarEvent | null> => {
     try {

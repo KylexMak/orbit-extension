@@ -31,7 +31,15 @@ function App() {
 
     if (result.auth_tokens) {
       setDebugStatus('Found pending tokens. Setting Supabase session...');
-      const { access_token, refresh_token } = result.auth_tokens as { access_token: string; refresh_token: string };
+      const tokens = result.auth_tokens as any;
+      const { access_token, refresh_token, provider_token } = tokens;
+
+      // Persist provider_token aggressively
+      if (provider_token) {
+        console.log('[App] Persisting provider_token to orbit_provider_token');
+        await chrome.storage.local.set({ orbit_provider_token: provider_token });
+      }
+
       await chrome.storage.local.remove(['auth_tokens']);
 
       const { error } = await supabase.auth.setSession({
@@ -43,10 +51,8 @@ function App() {
         setDebugStatus(`SetSession Error: ${error.message}`);
         setLoading(false);
       } else {
-        setDebugStatus('Session set!');
-        const { data: { session } } = await supabase.auth.getSession();
-        setSession(session);
-        if (session) checkProfile(session.user.id);
+        setDebugStatus('Session set! Waiting for auth listener...');
+        // Do NOT manually setSession here. onAuthStateChange will fire and pick up the token from storage.
       }
     }
   };
@@ -63,45 +69,77 @@ function App() {
       });
     }, 10000);
 
-    setDebugStatus('Checking session...');
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        setDebugStatus('Session found. Checking profile...');
-        checkProfile(session.user.id);
-      } else {
-        // No existing session — check if background worker stored tokens while popup was closed
-        await consumeStoredTokens();
-        // If consumeStoredTokens didn't set a session, show login screen
-        const { data: { session: rechecked } } = await supabase.auth.getSession();
-        if (!rechecked) {
-          setDebugStatus('No session found.');
-          setLoading(false);
+    const initializeSession = async () => {
+      setDebugStatus('Checking session...');
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        let currentSession = session as any;
+
+        // Try to recover provider_token from CONSTANT storage
+        if (currentSession && typeof chrome !== 'undefined' && chrome.storage?.local) {
+          const result = await chrome.storage.local.get(['orbit_provider_token']);
+          console.log('[App] Initial persistent storage check:', result);
+
+          if (result.orbit_provider_token) {
+            console.log('[App] Restoring provider_token from persistent storage');
+            // CLONE the session to ensure React sees a new object
+            currentSession = { ...currentSession, provider_token: result.orbit_provider_token };
+          }
         }
+
+        setSession(currentSession);
+
+        if (currentSession) {
+          setDebugStatus('Session found. Checking profile...');
+          await checkProfile(currentSession.user.id);
+        } else {
+          // No existing session — check if background worker stored tokens while popup was closed
+          await consumeStoredTokens();
+          // Re-check
+          const { data: { session: rechecked } } = await supabase.auth.getSession();
+          if (!rechecked) {
+            setDebugStatus('No session found.');
+            setLoading(false);
+          }
+        }
+      } catch (error: any) {
+        console.error('Error getting session:', error);
+        setDebugStatus(`Error: ${error.message}`);
+        setLoading(false);
       }
-    }).catch((error) => {
-      console.error('Error getting session:', error);
-      setDebugStatus(`Error: ${error.message}`);
-      setLoading(false);
-    });
+    };
+
+    initializeSession();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        setDebugStatus('Auth state changed. Checking profile...');
-        checkProfile(session.user.id);
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      let currentSession = session as any;
+
+      // Try to recover provider_token from CONSTANT storage (on change too)
+      if (currentSession && typeof chrome !== 'undefined' && chrome.storage?.local) {
+        const result = await chrome.storage.local.get(['orbit_provider_token']);
+        if (result.orbit_provider_token) {
+          console.log('[App] Restoring provider_token on auth change (persistent)');
+          currentSession = { ...currentSession, provider_token: result.orbit_provider_token };
+        }
       }
-      else if (!session && loading) {
+
+      setSession(currentSession);
+      if (currentSession) {
+        setDebugStatus('Auth state changed. Checking profile...');
+        checkProfile(currentSession.user.id);
+      }
+      else if (!currentSession && loading) {
         setLoading(false);
       }
     });
 
     // Listen for storage changes in case background worker stores tokens while popup is open
-    const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
+    const storageListener = async (changes: { [key: string]: chrome.storage.StorageChange }) => {
       if (changes.auth_tokens?.newValue) {
-        consumeStoredTokens();
+        console.log('[App] Storage changed, consuming tokens...');
+        await consumeStoredTokens();
       }
     };
     if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
@@ -206,6 +244,15 @@ function App() {
 
           if (response.success) {
             setDebugStatus('Got tokens. Setting Supabase session...');
+
+            // IMMEDIATE PERSISTENCE
+            if (response.provider_token) {
+              console.log('[App] handleGoogleLogin: Persisting provider_token immediately');
+              await chrome.storage.local.set({ orbit_provider_token: response.provider_token });
+              // Clean up temp tokens since we have what we need
+              await chrome.storage.local.remove(['auth_tokens']);
+            }
+
             const { error } = await supabase.auth.setSession({
               access_token: response.access_token,
               refresh_token: response.refresh_token || '',
@@ -217,8 +264,15 @@ function App() {
             } else {
               setDebugStatus('Session set!');
               const { data: { session } } = await supabase.auth.getSession();
-              setSession(session);
-              if (session) checkProfile(session.user.id);
+
+              // Patch the session object immediately so the UI updates
+              let currentSession = session as any;
+              if (currentSession && response.provider_token) {
+                currentSession = { ...currentSession, provider_token: response.provider_token };
+              }
+
+              setSession(currentSession);
+              if (currentSession) checkProfile(currentSession.user.id);
             }
           } else {
             setDebugStatus(`Auth Error: ${response.error}`);
@@ -279,14 +333,77 @@ function App() {
             </div>
           )}
 
-          <div className="text-xs text-aurora-muted/50 font-mono mt-8 text-center">
-            <p>Status: {debugStatus}</p>
-            <p className="mt-2 text-[10px] break-all max-w-xs mx-auto text-yellow-400">
+          <div className="text-xs text-aurora-muted/50 font-mono mt-8 text-center border-t border-white/10 pt-4 w-full">
+            <p className="mb-2">Status: {debugStatus}</p>
+            <div className="flex justify-center gap-4 mb-2">
+              <div className="text-[10px]">
+                <span className="opacity-50">Session:</span> {session ? 'Active' : 'None'}
+              </div>
+              <div className="text-[10px]">
+                <span className="opacity-50">Token:</span> {session && (session as any).provider_token ? 'Present' : 'Missing'}
+              </div>
+            </div>
+
+            <button
+              onClick={async () => {
+                setDebugStatus('Reading storage...');
+                // Force a check of storage directly first
+                if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+                  // Check persistent storage first
+                  const result = await chrome.storage.local.get(['orbit_provider_token', 'auth_tokens']);
+                  console.log('[App] Force refresh storage check:', result);
+
+                  const { data: { session: newSession } } = await supabase.auth.getSession();
+                  let currentSession = newSession as any;
+
+                  // Use persistent token if available, else check temp tokens
+                  const tokenToRestore = result.orbit_provider_token || (result.auth_tokens as any)?.provider_token;
+
+                  if (tokenToRestore) {
+                    if (currentSession) {
+                      currentSession = { ...currentSession, provider_token: tokenToRestore };
+                    }
+                    setDebugStatus('Token FOUND (Persistent) and restored.');
+
+                    // Ensure it's persisted if we found it in temp
+                    if (!result.orbit_provider_token && tokenToRestore) {
+                      await chrome.storage.local.set({ orbit_provider_token: tokenToRestore });
+                    }
+                  } else {
+                    setDebugStatus('Token MISSING from storage.');
+                  }
+
+                  setSession(currentSession);
+                  if (currentSession) checkProfile(currentSession.user.id);
+                } else {
+                  await consumeStoredTokens(); // Fallback
+                }
+              }}
+              className="text-[10px] bg-white/5 hover:bg-white/10 px-2 py-1 rounded transition-colors text-aurora-muted hover:text-white"
+            >
+              Force Refresh Connection
+            </button>
+
+            <p className="mt-2 text-[10px] break-all max-w-xs mx-auto text-yellow-400 opacity-50 hover:opacity-100 transition-opacity">
               Redirect URL: {displayRedirectUrl}
             </p>
-            <p className="text-[10px] mt-1 text-aurora-muted/30">
-              (ADD THIS URL TO SUPABASE)
-            </p>
+            <div className="mt-2 pt-2 border-t border-white/10">
+              <p className="text-[9px] opacity-70 mb-1">Last Debug:</p>
+              <button
+                onClick={async () => {
+                  const result = await chrome.storage.local.get(['last_callback_url']);
+                  if (result.last_callback_url) {
+                    console.log('Last Callback URL:', result.last_callback_url);
+                    alert('Logged URL to console. Check DevTools.');
+                  } else {
+                    alert('No callback URL recorded yet.');
+                  }
+                }}
+                className="text-[9px] bg-white/5 px-2 py-1 rounded"
+              >
+                Log Raw URL to Console
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -296,11 +413,16 @@ function App() {
       return <Onboarding onComplete={() => setHasProfile(true)} />;
     }
 
-    const ViewComponent = {
-      home: Home,
-      chat: Chat,
-      focus: Focus,
-    }[activeTab];
+    const renderActiveView = () => {
+      switch (activeTab) {
+        case 'home':
+          return <Home session={session} onConnectCalendar={handleGoogleLogin} />;
+        case 'chat':
+          return <Chat />;
+        case 'focus':
+          return <Focus />;
+      }
+    };
 
     return (
       <Layout
@@ -324,6 +446,9 @@ function App() {
               <button
                 onClick={async () => {
                   await supabase.auth.signOut();
+                  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+                    await chrome.storage.local.remove(['orbit_provider_token', 'auth_tokens']);
+                  }
                   setSession(null);
                   setShowSettings(false);
                 }}
@@ -338,7 +463,7 @@ function App() {
             </div>
           </div>
         ) : (
-          <ViewComponent />
+          renderActiveView()
         )}
       </Layout>
     );

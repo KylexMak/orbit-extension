@@ -8,8 +8,8 @@ import { format, differenceInMinutes, addHours } from 'date-fns';
 import { supabase } from '../lib/supabaseClient';
 import { Input } from '../components/ui/Input';
 
-export const Home = () => {
-    const { events, loading, addEvent, skipEvent } = useOrbitEvents();
+export const Home = ({ session, onConnectCalendar }: { session: any, onConnectCalendar: () => void }) => {
+    const { events, loading, skipEvent, deleteEvent } = useOrbitEvents();
     const [displayEvents, setDisplayEvents] = useState<Event[]>([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [newTitle, setNewTitle] = useState('');
@@ -20,25 +20,28 @@ export const Home = () => {
 
     const [googleEvents, setGoogleEvents] = useState<Event[]>([]);
     const [googleTasks, setGoogleTasks] = useState<Event[]>([]);
+    const [fetchError, setFetchError] = useState<string | null>(null);
 
     useEffect(() => {
         // Determine profile for sleep schedule
-        supabase.auth.getSession().then(async ({ data: { session } }) => {
-            if (session?.user) {
-                const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-                setProfile(data);
+        if (session?.user) {
+            supabase.from('profiles').select('*').eq('id', session.user.id).single()
+                .then(({ data }) => setProfile(data));
 
-                if (session.provider_token) {
-                    await fetchGoogleData(session.provider_token, session.user.id);
-                }
+            if (session.provider_token) {
+                console.log('[Home] Session has provider_token, fetching data...');
+                fetchGoogleData(session.provider_token, session.user.id);
+            } else {
+                console.log('[Home] Session missing provider_token, skipping fetch.');
             }
-        });
-    }, []);
+        }
+    }, [session]);
 
     const fetchGoogleData = async (providerToken: string, userId: string) => {
+        setFetchError(null);
         try {
             const { getUpcomingEvents, getTasks } = await import('../lib/googleCalendar');
-            
+
             // Fetch calendar events
             const gEvents = await getUpcomingEvents(providerToken);
             const mappedEvents: Event[] = gEvents.map(ge => ({
@@ -62,7 +65,7 @@ export const Home = () => {
                     // If task has a due date, use it; otherwise schedule for 1 hour from now
                     const dueDate = task.due ? new Date(task.due) : addHours(new Date(), 1);
                     const endDate = addHours(dueDate, 1); // Assume 1 hour duration
-                    
+
                     return {
                         id: `task-${task.id}`,
                         user_id: userId,
@@ -76,13 +79,20 @@ export const Home = () => {
                     };
                 });
             setGoogleTasks(mappedTasks);
-        } catch (err) {
+        } catch (err: any) {
             console.error('Error fetching Google data:', err);
+            setFetchError(err.message || 'Failed to sync');
         }
     };
 
     useEffect(() => {
-        const allEvents = [...events, ...googleEvents, ...googleTasks].sort((a, b) =>
+        // Create a Set of Google Event IDs to filter out local shadows
+        const googleEventIds = new Set(googleEvents.map(ge => ge.google_calendar_id).filter(Boolean));
+
+        // Filter out local events that are already represented by a Google Event
+        const filteredLocalEvents = events.filter(e => !e.google_calendar_id || !googleEventIds.has(e.google_calendar_id));
+
+        const allEvents = [...filteredLocalEvents, ...googleEvents, ...googleTasks].sort((a, b) =>
             new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
         );
         const withBreaks = injectSmartBreaks(allEvents);
@@ -96,7 +106,6 @@ export const Home = () => {
 
         // If it's a Google Calendar event, update it there too
         if (event.google_calendar_id) {
-            const { data: { session } } = await supabase.auth.getSession();
             if (session?.provider_token) {
                 try {
                     const { updateEvent: updateGoogleEvent } = await import('../lib/googleCalendar');
@@ -120,7 +129,7 @@ export const Home = () => {
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
-        
+
         // Parse times or use defaults
         const now = new Date();
         let start: Date;
@@ -130,7 +139,7 @@ export const Home = () => {
             const [hours, minutes] = newStartTime.split(':').map(Number);
             start = new Date(now);
             start.setHours(hours, minutes, 0, 0);
-            
+
             // If start time is in the past today, schedule for tomorrow
             if (start < now) {
                 start.setDate(start.getDate() + 1);
@@ -143,7 +152,7 @@ export const Home = () => {
             const [hours, minutes] = newEndTime.split(':').map(Number);
             end = new Date(start);
             end.setHours(hours, minutes, 0, 0);
-            
+
             // If end is before start, assume it's the next day
             if (end <= start) {
                 end.setDate(end.getDate() + 1);
@@ -152,32 +161,29 @@ export const Home = () => {
             end = addHours(start, 1);
         }
 
-        // Add to local Supabase
-        await addEvent(newTitle, start, end, newDescription || undefined);
+        // Check for Google connection first
+        if (!session?.provider_token) {
+            alert('Please connect to Google Calendar (top right) to add events.');
+            return;
+        }
 
-        // Sync to Google Calendar if connected
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.provider_token) {
-            try {
-                const { createEvent } = await import('../lib/googleCalendar');
-                const newEvent = await createEvent(
-                    session.provider_token, 
-                    newTitle, 
-                    start, 
-                    end, 
-                    newDescription || undefined
-                );
+        try {
+            const { createEvent } = await import('../lib/googleCalendar');
+            const newEvent = await createEvent(
+                session.provider_token,
+                newTitle,
+                start,
+                end,
+                newDescription || undefined
+            );
 
-                if (newEvent) {
-                    // Store the Google Calendar ID in Supabase for future updates
-                    await addEvent(newTitle, start, end, newDescription || undefined, newEvent.id);
-                    
-                    // Refresh Google data
-                    await fetchGoogleData(session.provider_token, session.user.id);
-                }
-            } catch (err) {
-                console.error("Failed to sync to Google Calendar", err);
+            if (newEvent) {
+                // Refresh Google data to show the new event
+                await fetchGoogleData(session.provider_token, session.user.id);
             }
+        } catch (err) {
+            console.error("Failed to create event in Google Calendar", err);
+            alert('Failed to create event in Google Calendar.');
         }
 
         setNewTitle('');
@@ -187,20 +193,47 @@ export const Home = () => {
         setShowAddForm(false);
     };
 
+    const handleDelete = async (event: Event) => {
+        if (confirm('Are you sure you want to delete this task?')) {
+            // Optimistic UI Update: Remove immediately from view
+            if (event.google_calendar_id) {
+                setGoogleEvents(prev => prev.filter(e => e.id !== event.id));
+            } else if (event.google_task_id) {
+                setGoogleTasks(prev => prev.filter(e => e.id !== event.id));
+            }
+
+            // Real Excecution
+            if (event.google_calendar_id && session?.provider_token) {
+                try {
+                    const { deleteEvent: deleteGoogleEvent } = await import('../lib/googleCalendar');
+                    await deleteGoogleEvent(session.provider_token, event.google_calendar_id);
+                    // Background sync to ensure consistency
+                    fetchGoogleData(session.provider_token, session.user.id);
+                } catch (err) {
+                    console.error('Failed to delete from Google Calendar:', err);
+                    alert('Failed to delete from Google Calendar. It may reappear on refresh.');
+                    // Revert? For now, we assume success or next refresh fixes it.
+                }
+            } else {
+                // Only delete locally if it's NOT a Google event (legacy support)
+                deleteEvent(event.id);
+            }
+        }
+    };
+
     const handleInsertWellnessBreaks = async () => {
-        const { data: { session } } = await supabase.auth.getSession();
         if (!session?.provider_token) {
-            alert('Please connect to Google Calendar first');
+            onConnectCalendar();
             return;
         }
 
         try {
             const { insertWellnessBreaks } = await import('../lib/googleCalendar');
             const { getUpcomingEvents } = await import('../lib/googleCalendar');
-            
+
             const currentEvents = await getUpcomingEvents(session.provider_token);
             const createdBreaks = await insertWellnessBreaks(session.provider_token, currentEvents);
-            
+
             if (createdBreaks.length > 0) {
                 alert(`Added ${createdBreaks.length} wellness break(s) to your calendar!`);
                 // Refresh the calendar
@@ -216,6 +249,19 @@ export const Home = () => {
 
     return (
         <div className="space-y-4">
+            {/* Google Calendar Connection Banner */}
+            {!session?.provider_token && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-blue-700">
+                        <Calendar className="w-4 h-4" />
+                        <span className="text-sm font-medium">Connect Google Calendar</span>
+                    </div>
+                    <Button size="sm" onClick={onConnectCalendar} variant="secondary" className="bg-white text-blue-600 hover:bg-blue-50 border-blue-200">
+                        Connect
+                    </Button>
+                </div>
+            )}
+
             <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-aurora-text">Your Rhythm</h2>
                 <div className="flex gap-2">
@@ -227,6 +273,12 @@ export const Home = () => {
                     </Button>
                 </div>
             </div>
+
+            {fetchError && (
+                <div className="bg-red-50 text-red-600 text-xs p-2 rounded border border-red-200">
+                    Sync Error: {fetchError}
+                </div>
+            )}
 
             {showAddForm && (
                 <Card className="animate-in fade-in slide-in-from-top-4">
@@ -285,7 +337,7 @@ export const Home = () => {
                     const isBreak = event.type === 'break';
                     const isTask = event.type === 'task';
                     const isGoogleEvent = !!event.google_calendar_id;
-                    
+
                     return (
                         <div
                             key={event.id}
@@ -325,6 +377,13 @@ export const Home = () => {
                                         </button>
                                         <button className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-green-500 transition-colors">
                                             <CheckCircle className="w-4 h-4" />
+                                        </button>
+                                        <button
+                                            onClick={() => handleDelete(event)}
+                                            className="p-2 hover:bg-red-100 rounded-full text-aurora-muted hover:text-red-500 transition-colors"
+                                            title="Delete"
+                                        >
+                                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
                                         </button>
                                     </div>
                                 )}
