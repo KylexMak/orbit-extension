@@ -29,7 +29,8 @@ export function useOrbitEvents() {
         start: Date, 
         end: Date, 
         description?: string,
-        googleCalendarId?: string
+        googleCalendarId?: string,
+        itemType?: 'event' | 'task'
     ) => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
@@ -48,6 +49,10 @@ export function useOrbitEvents() {
 
         if (googleCalendarId) {
             eventData.google_calendar_id = googleCalendarId;
+        }
+
+        if (itemType) {
+            eventData.type = itemType;
         }
 
         const { error } = await supabase.from('events').insert(eventData);

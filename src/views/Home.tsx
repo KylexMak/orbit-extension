@@ -3,10 +3,11 @@ import { useOrbitEvents } from '../hooks/useOrbitEvents';
 import { injectSmartBreaks, calculateNextAvailableSlot, type Event } from '../lib/scheduleUtils';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Plus, SkipForward, CheckCircle, Calendar, ListTodo, Clock } from 'lucide-react';
-import { format, differenceInMinutes, addHours } from 'date-fns';
+import { Plus, SkipForward, CheckCircle, Calendar, ListTodo, Clock, Download, CalendarPlus } from 'lucide-react';
+import { format, differenceInMinutes, addHours, startOfDay } from 'date-fns';
 import { supabase } from '../lib/supabaseClient';
 import { Input } from '../components/ui/Input';
+import { detectDatesInText, buildIcsFile, downloadIcs, type CapturedDateItem } from '../lib/dateCapture';
 
 export const Home = () => {
     const { events, loading, addEvent, skipEvent } = useOrbitEvents();
@@ -14,12 +15,20 @@ export const Home = () => {
     const [showAddForm, setShowAddForm] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
+    const [newItemType, setNewItemType] = useState<'task' | 'event'>('event');
+    const [newDueDate, setNewDueDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+    const [newDueTime, setNewDueTime] = useState('');
     const [newStartTime, setNewStartTime] = useState('');
     const [newEndTime, setNewEndTime] = useState('');
     const [profile, setProfile] = useState<{ sleep_start: string, sleep_end: string } | null>(null);
 
     const [googleEvents, setGoogleEvents] = useState<Event[]>([]);
     const [googleTasks, setGoogleTasks] = useState<Event[]>([]);
+
+    const [capturedItems, setCapturedItems] = useState<CapturedDateItem[]>([]);
+    const [capturedSelected, setCapturedSelected] = useState<Set<string>>(new Set());
+    const [captureLoading, setCaptureLoading] = useState(false);
+    const [captureError, setCaptureError] = useState<string | null>(null);
 
     useEffect(() => {
         // Determine profile for sleep schedule
@@ -121,70 +130,142 @@ export const Home = () => {
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
         
-        // Parse times or use defaults
         const now = new Date();
         let start: Date;
         let end: Date;
 
-        if (newStartTime) {
-            const [hours, minutes] = newStartTime.split(':').map(Number);
-            start = new Date(now);
-            start.setHours(hours, minutes, 0, 0);
-            
-            // If start time is in the past today, schedule for tomorrow
-            if (start < now) {
-                start.setDate(start.getDate() + 1);
+        if (newItemType === 'task') {
+            // Task: due date (and optional time)
+            start = startOfDay(new Date(newDueDate));
+            if (newDueTime) {
+                const [hours, minutes] = newDueTime.split(':').map(Number);
+                start.setHours(hours, minutes, 0, 0);
             }
+            end = addHours(start, 1); // DB needs end; use 1hr block for display
         } else {
-            start = now;
+            // Event: start and end time
+            if (newStartTime) {
+                const [hours, minutes] = newStartTime.split(':').map(Number);
+                start = new Date(now);
+                start.setHours(hours, minutes, 0, 0);
+                if (start < now) start.setDate(start.getDate() + 1);
+            } else {
+                start = now;
+            }
+            if (newEndTime) {
+                const [h, m] = newEndTime.split(':').map(Number);
+                end = new Date(start);
+                end.setHours(h, m, 0, 0);
+                if (end <= start) end.setDate(end.getDate() + 1);
+            } else {
+                end = addHours(start, 1);
+            }
         }
 
-        if (newEndTime) {
-            const [hours, minutes] = newEndTime.split(':').map(Number);
-            end = new Date(start);
-            end.setHours(hours, minutes, 0, 0);
-            
-            // If end is before start, assume it's the next day
-            if (end <= start) {
-                end.setDate(end.getDate() + 1);
-            }
-        } else {
-            end = addHours(start, 1);
-        }
-
-        // Add to local Supabase
-        await addEvent(newTitle, start, end, newDescription || undefined);
-
-        // Sync to Google Calendar if connected
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.provider_token) {
-            try {
-                const { createEvent } = await import('../lib/googleCalendar');
-                const newEvent = await createEvent(
-                    session.provider_token, 
-                    newTitle, 
-                    start, 
-                    end, 
-                    newDescription || undefined
-                );
-
-                if (newEvent) {
-                    // Store the Google Calendar ID in Supabase for future updates
-                    await addEvent(newTitle, start, end, newDescription || undefined, newEvent.id);
-                    
-                    // Refresh Google data
-                    await fetchGoogleData(session.provider_token, session.user.id);
+        // Sync to Google Calendar first for events so we can store the id in one insert
+        let googleId: string | undefined;
+        if (newItemType === 'event') {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.provider_token) {
+                try {
+                    const { createEvent } = await import('../lib/googleCalendar');
+                    const created = await createEvent(
+                        session.provider_token, 
+                        newTitle, 
+                        start, 
+                        end, 
+                        newDescription || undefined
+                    );
+                    if (created) {
+                        googleId = created.id;
+                        await fetchGoogleData(session.provider_token, session.user.id);
+                    }
+                } catch (err) {
+                    console.error("Failed to sync to Google Calendar", err);
                 }
-            } catch (err) {
-                console.error("Failed to sync to Google Calendar", err);
             }
         }
+
+        await addEvent(newTitle, start, end, newDescription || undefined, googleId, newItemType);
 
         setNewTitle('');
         setNewDescription('');
+        setNewItemType('event');
+        setNewDueDate(format(new Date(), 'yyyy-MM-dd'));
+        setNewDueTime('');
         setNewStartTime('');
         setNewEndTime('');
         setShowAddForm(false);
+    };
+
+    const handleCaptureFromPage = async () => {
+        setCaptureLoading(true);
+        setCaptureError(null);
+        setCapturedItems([]);
+        setCapturedSelected(new Set());
+        if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.scripting) {
+            setCaptureError('Open this from the Orbit extension popup on a webpage.');
+            setCaptureLoading(false);
+            return;
+        }
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) {
+                setCaptureError('No active tab found.');
+                setCaptureLoading(false);
+                return;
+            }
+            const results = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => ({ text: document.body?.innerText ?? '', title: document.title ?? '' }),
+            });
+            const { text = '', title = '' } = results?.[0]?.result ?? {};
+            const items = detectDatesInText(text, title);
+            setCapturedItems(items);
+            setCapturedSelected(new Set(items.map((i) => i.id)));
+            if (items.length === 0) setCaptureError('No dates or deadlines found on this page.');
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : 'Could not read page. Try a normal webpage (not chrome://).';
+            setCaptureError(msg);
+        }
+        setCaptureLoading(false);
+    };
+
+    const handleExportToGoogle = async () => {
+        const selected = capturedItems.filter((i) => capturedSelected.has(i.id));
+        if (selected.length === 0) {
+            alert('Select at least one item.');
+            return;
+        }
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.provider_token) {
+            alert('Sign in with Google first to export to Google Calendar.');
+            return;
+        }
+        try {
+            const { createEvent } = await import('../lib/googleCalendar');
+            for (const item of selected) {
+                const end = item.endDate ?? new Date(item.date.getTime() + 60 * 60 * 1000);
+                await createEvent(session.provider_token, item.title, item.date, end, item.context);
+            }
+            await fetchGoogleData(session.provider_token, session.user.id);
+            alert(`Added ${selected.length} event(s) to Google Calendar.`);
+            setCapturedItems([]);
+        } catch (err) {
+            console.error(err);
+            alert('Failed to add to Google Calendar. Try again.');
+        }
+    };
+
+    const handleDownloadIcs = () => {
+        const selected = capturedItems.filter((i) => capturedSelected.has(i.id));
+        if (selected.length === 0) {
+            alert('Select at least one item.');
+            return;
+        }
+        const ics = buildIcsFile(selected);
+        downloadIcs(ics, `orbit-captured-${format(new Date(), 'yyyy-MM-dd')}.ics`);
+        alert(`Downloaded ${selected.length} event(s). Import the .ics file into Google Calendar.`);
     };
 
     const handleInsertWellnessBreaks = async () => {
@@ -228,10 +309,94 @@ export const Home = () => {
                 </div>
             </div>
 
+            <Card>
+                <CardContent className="pt-4">
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-center gap-2">
+                            <CalendarPlus className="w-4 h-4 text-aurora-primary" />
+                            <span className="text-sm font-medium text-aurora-text">Capture from page</span>
+                        </div>
+                        <p className="text-xs text-aurora-muted">
+                            Detect dates and deadlines on the current tab. Export to Google Calendar or download an .ics file.
+                        </p>
+                        <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={handleCaptureFromPage}
+                            disabled={captureLoading}
+                            className="w-full"
+                        >
+                            {captureLoading ? 'Scanning...' : 'Capture dates from this page'}
+                        </Button>
+                        {captureError && (
+                            <p className="text-xs text-amber-600">{captureError}</p>
+                        )}
+                        {capturedItems.length > 0 && (
+                            <div className="space-y-2 animate-in fade-in">
+                                <p className="text-xs font-medium text-aurora-text">Detected ({capturedItems.length})</p>
+                                <div className="max-h-32 overflow-y-auto space-y-1.5 border border-gray-200 rounded-lg p-2 bg-gray-50">
+                                    {capturedItems.map((item) => (
+                                        <label key={item.id} className="flex items-start gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={capturedSelected.has(item.id)}
+                                                onChange={(e) => {
+                                                    setCapturedSelected((prev) => {
+                                                        const next = new Set(prev);
+                                                        if (e.target.checked) next.add(item.id);
+                                                        else next.delete(item.id);
+                                                        return next;
+                                                    });
+                                                }}
+                                                className="mt-1 rounded border-gray-300"
+                                            />
+                                            <span className="text-xs text-aurora-text flex-1 min-w-0">
+                                                <span className="font-medium truncate block">{item.title || 'Event'}</span>
+                                                <span className="text-aurora-muted">{format(item.date, 'MMM d, yyyy')}</span>
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button size="sm" onClick={handleExportToGoogle} className="flex-1">
+                                        <Calendar className="w-3.5 h-3.5 mr-1" />
+                                        Google Calendar
+                                    </Button>
+                                    <Button size="sm" variant="secondary" onClick={handleDownloadIcs} className="flex-1">
+                                        <Download className="w-3.5 h-3.5 mr-1" />
+                                        Download .ics
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
+
             {showAddForm && (
                 <Card className="animate-in fade-in slide-in-from-top-4">
                     <CardContent className="pt-4">
                         <form onSubmit={handleCreate} className="space-y-3">
+                            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                                <button
+                                    type="button"
+                                    onClick={() => setNewItemType('task')}
+                                    className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${newItemType === 'task'
+                                        ? 'bg-blue-900 text-white'
+                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    Task
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setNewItemType('event')}
+                                    className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${newItemType === 'event'
+                                        ? 'bg-blue-100 text-blue-900 border-blue-200'
+                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    Event
+                                </button>
+                            </div>
                             <Input
                                 placeholder="What needs doing?"
                                 value={newTitle}
@@ -244,26 +409,48 @@ export const Home = () => {
                                 value={newDescription}
                                 onChange={e => setNewDescription(e.target.value)}
                             />
-                            <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                    <label className="text-xs text-aurora-muted mb-1 block">Start Time</label>
-                                    <Input
-                                        type="time"
-                                        value={newStartTime}
-                                        onChange={e => setNewStartTime(e.target.value)}
-                                        placeholder="Now"
-                                    />
+                            {newItemType === 'task' ? (
+                                <div className="space-y-2">
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">Due date</label>
+                                        <Input
+                                            type="date"
+                                            value={newDueDate}
+                                            onChange={e => setNewDueDate(e.target.value)}
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">Due time (optional)</label>
+                                        <Input
+                                            type="time"
+                                            value={newDueTime}
+                                            onChange={e => setNewDueTime(e.target.value)}
+                                        />
+                                    </div>
                                 </div>
-                                <div>
-                                    <label className="text-xs text-aurora-muted mb-1 block">End Time</label>
-                                    <Input
-                                        type="time"
-                                        value={newEndTime}
-                                        onChange={e => setNewEndTime(e.target.value)}
-                                        placeholder="+1 hour"
-                                    />
+                            ) : (
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">Start Time</label>
+                                        <Input
+                                            type="time"
+                                            value={newStartTime}
+                                            onChange={e => setNewStartTime(e.target.value)}
+                                            placeholder="Now"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-aurora-muted mb-1 block">End Time</label>
+                                        <Input
+                                            type="time"
+                                            value={newEndTime}
+                                            onChange={e => setNewEndTime(e.target.value)}
+                                            placeholder="+1 hour"
+                                        />
+                                    </div>
                                 </div>
-                            </div>
+                            )}
                             <div className="flex gap-2">
                                 <Button type="submit" className="flex-1">Add</Button>
                                 <Button type="button" variant="secondary" onClick={() => setShowAddForm(false)}>Cancel</Button>
@@ -285,18 +472,21 @@ export const Home = () => {
                     const isBreak = event.type === 'break';
                     const isTask = event.type === 'task';
                     const isGoogleEvent = !!event.google_calendar_id;
+                    const isEvent = !isBreak && !isTask;
                     
                     return (
                         <div
                             key={event.id}
                             className={`relative p-4 rounded-xl border transition-all ${isBreak
                                 ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                                : 'bg-white border-gray-200 text-aurora-text hover:border-aurora-accent/50 shadow-sm'
+                                : isTask
+                                    ? 'bg-blue-900 border-blue-800 text-white hover:border-blue-700'
+                                    : 'bg-blue-50 border-blue-200 text-blue-900 hover:border-blue-300'
                                 }`}
                         >
                             <div className="flex justify-between items-start">
                                 <div className="flex-1">
-                                    <div className="flex items-center gap-2 text-sm opacity-70 font-mono mb-1">
+                                    <div className={`flex items-center gap-2 text-sm font-mono mb-1 ${isTask ? 'text-blue-200' : isEvent ? 'text-blue-700 opacity-90' : ''}`}>
                                         {isTask ? (
                                             <ListTodo className="w-3 h-3" />
                                         ) : isGoogleEvent ? (
@@ -305,12 +495,18 @@ export const Home = () => {
                                             <Clock className="w-3 h-3" />
                                         )}
                                         <span>
-                                            {format(new Date(event.start_time), 'h:mm a')} - {format(new Date(event.end_time), 'h:mm a')}
+                                            {isTask
+                                                ? (() => {
+                                                    const d = new Date(event.start_time);
+                                                    const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0;
+                                                    return `Due: ${format(d, 'MMM d, yyyy')}${hasTime ? ` at ${format(d, 'h:mm a')}` : ''}`;
+                                                })()
+                                                : `${format(new Date(event.start_time), 'h:mm a')} - ${format(new Date(event.end_time), 'h:mm a')}`}
                                         </span>
                                     </div>
                                     <h3 className="font-medium text-lg">{event.title}</h3>
                                     {event.description && (
-                                        <p className="text-sm text-aurora-muted mt-1">{event.description}</p>
+                                        <p className={`text-sm mt-1 ${isTask ? 'text-blue-200' : 'text-aurora-muted'}`}>{event.description}</p>
                                     )}
                                 </div>
 
@@ -318,12 +514,12 @@ export const Home = () => {
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => handleSkip(event)}
-                                            className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-aurora-accent transition-colors"
+                                            className={`p-2 rounded-full transition-colors ${isTask ? 'hover:bg-blue-800 text-blue-200 hover:text-white' : 'hover:bg-blue-100 text-aurora-muted hover:text-aurora-accent'}`}
                                             title="Skip & Reschedule"
                                         >
                                             <SkipForward className="w-4 h-4" />
                                         </button>
-                                        <button className="p-2 hover:bg-gray-100 rounded-full text-aurora-muted hover:text-green-500 transition-colors">
+                                        <button className={`p-2 rounded-full transition-colors ${isTask ? 'hover:bg-blue-800 text-blue-200 hover:text-green-400' : 'hover:bg-blue-100 text-aurora-muted hover:text-green-500'}`}>
                                             <CheckCircle className="w-4 h-4" />
                                         </button>
                                     </div>
