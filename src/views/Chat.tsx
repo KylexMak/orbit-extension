@@ -3,8 +3,9 @@ import { supabase } from '../lib/supabaseClient';
 import { getGeminiResponse } from '../lib/gemini';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { MessageSquare, Bot, Send } from 'lucide-react';
+import { MessageSquare, Bot, Send, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { format } from 'date-fns';
 
 
 interface Message {
@@ -16,13 +17,15 @@ interface Message {
     is_bot?: boolean;
 }
 
-export const Chat = () => {
+export const Chat = ({ session }: { session?: any }) => {
     const [mode, setMode] = useState<'community' | 'bob'>('community');
     const [messages, setMessages] = useState<Message[]>([]);
     const [inputText, setInputText] = useState('');
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const [loadingAI, setLoadingAI] = useState(false);
+    const [todayEvents, setTodayEvents] = useState('');
+    const [refreshing, setRefreshing] = useState(false);
 
     useEffect(() => {
         supabase.auth.getUser().then(({ data }) => {
@@ -43,8 +46,22 @@ export const Chat = () => {
             setMessages([
                 { id: 'welcome', user_id: 'bob', content: "Hi! I'm Bob. How are you feeling today?", created_at: new Date().toISOString(), is_bot: true }
             ]);
+            // Fetch today's events for Bob's context
+            if (session?.provider_token) {
+                import('../lib/googleCalendar').then(({ getUpcomingEvents }) => {
+                    getUpcomingEvents(session.provider_token).then(events => {
+                        const summary = events.map(ev => {
+                            const time = ev.start.dateTime
+                                ? format(new Date(ev.start.dateTime), 'h:mm a')
+                                : ev.start.date || '';
+                            return `- ${time}: ${ev.summary}`;
+                        }).join('\n');
+                        setTodayEvents(summary);
+                    }).catch(err => console.error('Failed to fetch events for chat context:', err));
+                });
+            }
         }
-    }, [mode]);
+    }, [mode, session?.provider_token]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -85,7 +102,17 @@ export const Chat = () => {
             setMessages(prev => [...prev, userMsg]);
             setLoadingAI(true);
 
-            const aiResponse = await getGeminiResponse(text);
+            // Build chat history from recent messages (skip welcome)
+            const recentMessages = [...messages, userMsg]
+                .filter(m => m.id !== 'welcome')
+                .slice(-10)
+                .map(m => `${m.is_bot ? 'Bob' : 'User'}: ${m.content}`)
+                .join('\n');
+
+            const aiResponse = await getGeminiResponse(text, {
+                todayEvents: todayEvents || undefined,
+                chatHistory: recentMessages || undefined,
+            });
 
             const bobMsg: Message = {
                 id: (Date.now() + 1).toString(),
@@ -99,9 +126,21 @@ export const Chat = () => {
         }
     };
 
+    const handleRefresh = async () => {
+        setRefreshing(true);
+        if (mode === 'community') {
+            await fetchCommunityMessages();
+        } else {
+            setMessages([
+                { id: 'welcome', user_id: 'bob', content: "Hi! I'm Bob. How are you feeling today?", created_at: new Date().toISOString(), is_bot: true }
+            ]);
+        }
+        setRefreshing(false);
+    };
+
     return (
         <div className="flex flex-col h-full">
-            <div className="flex justify-center space-x-2 mb-4">
+            <div className="flex justify-center items-center space-x-2 mb-4">
                 <button
                     onClick={() => setMode('community')}
                     className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors", mode === 'community' ? "bg-aurora-primary text-white shadow-sm" : "bg-white text-aurora-muted border border-gray-200 hover:text-aurora-text")}
@@ -113,6 +152,14 @@ export const Chat = () => {
                     className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors", mode === 'bob' ? "bg-aurora-secondary text-white shadow-sm" : "bg-white text-aurora-muted border border-gray-200 hover:text-aurora-text")}
                 >
                     <div className="flex items-center gap-2"><Bot className="w-4 h-4" /> Bob (AI)</div>
+                </button>
+                <button
+                    onClick={handleRefresh}
+                    disabled={refreshing}
+                    className="p-2 rounded-full text-aurora-muted hover:text-aurora-text hover:bg-gray-100 transition-colors"
+                    title="Refresh chat"
+                >
+                    <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
                 </button>
             </div>
 

@@ -418,7 +418,7 @@ function App() {
         case 'home':
           return <Home session={session} onConnectCalendar={handleGoogleLogin} />;
         case 'chat':
-          return <Chat />;
+          return <Chat session={session} />;
         case 'focus':
           return <Focus />;
       }
